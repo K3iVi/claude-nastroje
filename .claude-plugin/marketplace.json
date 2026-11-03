@@ -1,0 +1,17 @@
+{
+  "name": "claude-nastroje",
+  "owner": { "name": "K3iVi" },
+  "description": "Panel s přehledem oken a hlídač compactu pro Claude desktop na Windows",
+  "plugins": [
+    {
+      "name": "okna",
+      "source": "./plugins/okna",
+      "description": "Panel s přehledem oken Claude desktop: čeká na vás, pracuje, nepřečtené, končící cache; proklik"
+    },
+    {
+      "name": "hlidac-compact",
+      "source": "./plugins/hlidac-compact",
+      "description": "Hlídač compactu: velká nečinná okna zkompaktuje před vypršením hodinové cache (Windows, Plánovač úloh)"
+    }
+  ]
+}
