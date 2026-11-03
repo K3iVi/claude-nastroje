@@ -10,9 +10,19 @@ claude plugin install hlidac-compact@claude-nastroje
 
 Po instalaci restartuj Claude.
 
+Aktualizace na novou verzi:
+
+```
+claude plugin marketplace update claude-nastroje
+claude plugin update okna@claude-nastroje
+claude plugin update hlidac-compact@claude-nastroje
+```
+
+Pak restartuj Claude nebo v okně napiš `/reload-plugins`.
+
 ## okna — panel s přehledem oken
 
-V každém okně ukáže panel se seznamem ostatních oken. Nahoře jsou okna, která čekají na odpověď, pracují, mají něco nepřečteného nebo jim do 15 minut končí cache (červeně). Pod nimi je, co bylo hotové za poslední týden. Klik okno otevře, „skrýt“ ho schová do jeho další aktivity. „odložit“ přesune okno, které teď počká, do sbalené sekce „Odloženo“ bez tečky. Nahoru se vrátí, až do něj něco napíšeš (compact se nepočítá), nebo tlačítkem „vrátit“. Příkaz `/okna` vypíše totéž do chatu, hodí se třeba přes Remote Control z mobilu.
+V každém okně ukáže panel se seznamem ostatních oken ve skupinách podle stavu: Čeká na tebe, Pracuje, Končí cache (do 15 minut) a Nepřečtené. Každá skupina má barevný čtvereček a počet, u oken je vpravo jejich stáří. Pod skupinami jsou sbalené sekce „Dřív“ (hotové za poslední týden) a „Odloženo“, klik na ně je rozbalí. Klik na okno ho otevře. Po najetí myší se u okna ukážou tlačítka „odložit“ a „skrýt“. „skrýt“ okno schová do jeho další aktivity. „odložit“ přesune okno, které teď počká, do sbalené sekce „Odloženo“ bez tečky. Nahoru se vrátí, až do něj něco napíšeš (compact se nepočítá), nebo tlačítkem „vrátit“. Klik na počet oken v hlavičce zapne nebo vypne barevný pruh se stavy, jako je pruh v panelu Context. Volba se pamatuje. Panel se otevírá sám v každém novém okně. Když ho zavřeš, napiš `/okna`: panel se znovu otevře a seznam se zároveň vypíše do chatu, hodí se třeba přes Remote Control z mobilu.
 
 Běží celý uvnitř Claude, bez PowerShellu a Plánovače. Nic nikam neposílá. Výjimkou je přenos mezi PC: ten zapne jen soubor `%USERPROFILE%\.claude\okna-sync.json` s `{"url": "https://…", "key": "…"}`, a to na vlastní server, který si každý provozuje sám.
 

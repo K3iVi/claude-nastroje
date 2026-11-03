@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { ElementConstructor, EngineInterface, Register, SvgProps } from 'claude-code'
 
 import type { RemotePc, Row } from '../types'
 
@@ -21,7 +21,8 @@ const rowsAtom = atom({ plugin: 'okna', key: 'rows' } as const, [] as Row[])
 const infoAtom = atom({ plugin: 'okna', key: 'info' } as const, '')
 const remoteAtom = atom({ plugin: 'okna', key: 'remote' } as const, [] as RemotePc[])
 const syncAtom = atom({ plugin: 'okna', key: 'sync' } as const, '')
-const deferOpenAtom = atom({ plugin: 'okna', key: 'deferOpen' } as const, false)
+const openAtom = atom({ plugin: 'okna', key: 'open' } as const, {} as Record<string, boolean>)
+const barAtom = atom({ plugin: 'okna', key: 'bar' } as const, false)
 
 // Deferred windows, by the reply they had then: this PC's by turn, another PC's by activity.
 type Deferred = Record<string, string>
@@ -389,10 +390,51 @@ function asText(rows: Row[], remote: RemotePc[], now: number): string {
 
 const isRemote = (row: Row) => row.id.includes('|')
 
+// The square colors, as the app's sidebar: blue wants you, orange works, red is about to lose its cache.
+const COLORS = { waiting: '#378ADD', running: '#EF9F27', cache: '#E24B4A', unread: '#85B7EB', rest: '#B4B2A9' }
+
+type Group = { key: string; label: string; color: string; rows: Row[] }
+
+// The windows that want a look, each in the first group it belongs to.
+function groups(rows: Row[], now: number): Group[] {
+  const live = rows.filter(r => !r.deferred).sort(byActivity)
+  const cache = (r: Row) => cacheLeftMin(r, now) !== null
+  return [
+    { key: 'waiting', label: 'Čeká na tebe', color: COLORS.waiting, rows: live.filter(r => r.waiting) },
+    { key: 'running', label: 'Pracuje', color: COLORS.running, rows: live.filter(r => !r.waiting && r.isRunning) },
+    { key: 'cache', label: 'Končí cache', color: COLORS.cache, rows: live.filter(r => !r.waiting && !r.isRunning && cache(r)) },
+    {
+      key: 'unread',
+      label: 'Nepřečtené',
+      color: COLORS.unread,
+      rows: live.filter(r => !r.waiting && !r.isRunning && !cache(r) && r.unread),
+    },
+  ].filter(g => g.rows.length > 0)
+}
+
+// The bar as one thin SVG, stretched to the pane's width.
+function barSvg(parts: { n: number; color: string }[]): string {
+  const total = parts.reduce((sum, p) => sum + p.n, 0) || 1
+  let x = 0
+  const rects = parts
+    .filter(p => p.n > 0)
+    .map(p => {
+      const w = (p.n / total) * 100
+      const rect = `<rect x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="6" fill="${p.color}"/>`
+      x += w
+      return rect
+    })
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 6" preserveAspectRatio="none" width="100%" height="6">${rects.join('')}</svg>`
+}
+
+const windowsCount = (n: number) => `${n} ${n === 1 ? 'okno' : n >= 2 && n <= 4 ? 'okna' : 'oken'}`
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'okna', description: 'Přehled oken: otevře panel a vypíše seznam do chatu' })
     $.clock.every(POLL_MS, () => refresh($))
+    await update($, barAtom, () => false)
+    if ((await $.store.get('bar')) === true) await update($, barAtom, () => true)
     await $.ui.open({ id: PANE, title: TITLE, closeOnEscape: true })
     void refresh($)
     return next(e)
@@ -407,12 +449,16 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button } = ui
+    // Only the graphical surfaces have Svg; the terminal draws the bar in blocks.
+    const Svg = e.surface === 'terminal' ? undefined : (ui as { Svg?: ElementConstructor<SvgProps> }).Svg
     const rows = await read($, rowsAtom)
     const info = await read($, infoAtom)
     const remote = await read($, remoteAtom)
     const sync = await read($, syncAtom)
-    const deferOpen = await read($, deferOpenAtom)
+    const open = await read($, openAtom)
+    const bar = await read($, barAtom)
     const now = await $.clock.now()
 
     // Applies `fn` to the row's list, this PC's or the other PC's it came from.
@@ -447,6 +493,17 @@ export const register: Register = on => {
       await editList(row, list => list.map(r => (r.id === row.id ? { ...r, deferred: defer } : r)))
     }
 
+    // Folded sections ("Dřív", "Odloženo", another PC) open and close by their key.
+    const toggle = (key: string) => update($, openAtom, open => ({ ...open, [key]: !open[key] }))
+
+    // The bar's own switch: the window count in the header; kept across sessions.
+    async function toggleBar() {
+      await $.store.set('bar', !bar)
+      await update($, barAtom, () => !bar)
+    }
+
+    // Row buttons show under the pointer where there is one, always where there is not.
+    const hoverable = e.surface === 'desktop' || e.surface === 'vscode'
     const smallButton = (key: string, label: string, onPress: () => Promise<void>) => (
       <Button key={key} plain dimColor onPress={onPress}>
         <Text size="caption" dimColor>
@@ -454,105 +511,134 @@ export const register: Register = on => {
         </Text>
       </Button>
     )
-    const hideButton = (row: Row) => smallButton(`hide-${row.id}`, 'skrýt', () => hideRow(row))
-    const deferButton = (row: Row) => smallButton(`defer-${row.id}`, 'odložit', () => deferRow(row, true))
-
-
-    // One clickable row per window, as the mobile list: state mark, title, age;
-    // a waiting window adds its question in short.
-    const line = (row: Row) => (
-      // The dot stays outside the Button: a desktop button draws its children in one color.
-      <Box key={row.id} flexDirection="column" marginBottom={1}>
-        <Box flexDirection="row">
-          {/* As the app's sidebar: blue = wants you (waiting or unread), orange = working, red = cache ending, none = seen and done. */}
-          <Text color={row.isRunning ? '#ff8c00' : cacheLeftMin(row, now) !== null ? 'red' : 'blue'}>
-            {row.isRunning || row.waiting || row.unread || cacheLeftMin(row, now) !== null ? '● ' : '   '}
-          </Text>
-          <Button key={row.id} onPress={() => openRow(row)}>
-            {row.unread ? <Text bold>{row.title}</Text> : row.title}
-            {cacheLeftMin(row, now) === null ? (
-              <Text dimColor> {age(row.lastActivityAt, now)}</Text>
-            ) : (
-              <Text color="red"> cache končí za {cacheLeftMin(row, now)} min</Text>
-            )}
-          </Button>
-          {row.isRunning ? null : <Text> </Text>}
-          {row.isRunning ? null : deferButton(row)}
-          {row.isRunning ? null : <Text> </Text>}
-          {row.isRunning ? null : hideButton(row)}
+    // No key of their own: the row's keyed Box is the hover scope that reveals them.
+    const actions = (row: Row, kinds: ('defer' | 'hide' | 'back')[]) =>
+      kinds.length === 0 ? null : (
+        <Box
+          flexDirection="row"
+          gap={1}
+          marginLeft={1}
+          display={hoverable ? 'none' : 'flex'}
+          hover={hoverable ? { display: 'flex' } : undefined}
+        >
+          {kinds.map(kind =>
+            kind === 'defer'
+              ? smallButton(`defer-${row.id}`, 'odložit', () => deferRow(row, true))
+              : kind === 'hide'
+                ? smallButton(`hide-${row.id}`, 'skrýt', () => hideRow(row))
+                : smallButton(`back-${row.id}`, 'vrátit', () => deferRow(row, false)),
+          )}
         </Box>
-        {row.waiting && row.snippet ? (
-          <Box paddingLeft={3}>
-            <Text dimColor>{short(row.snippet)}</Text>
+      )
+
+    // One window: title on the left (bold while unread), its age on the right, the
+    // buttons beside the title under the pointer; a waiting window adds its question.
+    const windowRow = (row: Row, dim: boolean, kinds: ('defer' | 'hide' | 'back')[]) => {
+      const left = cacheLeftMin(row, now)
+      return (
+        <Box key={row.id} flexDirection="column" paddingLeft={3}>
+          <Box key={`row-${row.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
+            <Box flexDirection="row" flexShrink={1}>
+              <Button key={row.id} plain onPress={() => openRow(row)}>
+                <Text dimColor={dim} weight={row.unread ? 'semibold' : 'regular'}>
+                  {row.title}
+                </Text>
+              </Button>
+              {actions(row, kinds)}
+            </Box>
+            {left !== null && !dim ? (
+              <Text color={COLORS.cache}>za {left} min</Text>
+            ) : (
+              <Text dimColor>{age(row.lastActivityAt, now)}</Text>
+            )}
           </Box>
-        ) : null}
-      </Box>
-    )
+          {row.waiting && row.snippet && !dim ? (
+            <Box paddingLeft={2}>
+              <Text size="footnote" dimColor>
+                {short(row.snippet)}
+              </Text>
+            </Box>
+          ) : null}
+        </Box>
+      )
+    }
 
-    // A seen and done window: one dim line, no dot, no gap.
-    const earlierLine = (row: Row) => (
-      <Box key={row.id} flexDirection="row" paddingLeft={3}>
-        <Button key={row.id} onPress={() => openRow(row)}>
-          <Text size="footnote" dimColor>
-            {row.title} · {age(row.lastActivityAt, now)}
-          </Text>
-        </Button>
-        <Text> </Text>
-        {hideButton(row)}
-      </Box>
-    )
-
-    const heading = (key: string, text: string, gap: boolean) => (
-      <Box key={key} paddingLeft={3} marginTop={gap ? 1 : 0}>
-        <Text size="footnote" dimColor bold>
-          {text}
+    // A group as in the Context pane: color square, name, count on the right.
+    const groupHeading = (key: string, group: Group) => (
+      <Box key={`g-${key}`} flexDirection="row" justifyContent="space-between" marginTop={1}>
+        <Text>
+          <Text color={group.color}>■ </Text>
+          <Text weight="medium">{group.label}</Text>
         </Text>
+        <Text dimColor>{group.rows.length}</Text>
       </Box>
     )
 
-    // A deferred window: one dim line with "vrátit", shown only with the section open.
-    const deferredLine = (row: Row) => (
-      <Box key={row.id} flexDirection="row" paddingLeft={3}>
-        <Button key={row.id} onPress={() => openRow(row)}>
-          <Text size="footnote" dimColor>
-            {row.title} · {age(row.lastActivityAt, now)}
+    // A folded section: "› Dřív" on the left, its count on the right.
+    const foldHeading = (key: string, label: string, count: number) => (
+      <Box key={`f-${key}`} flexDirection="row" justifyContent="space-between" marginTop={1}>
+        <Button key={`f-${key}`} plain dimColor onPress={() => toggle(key)}>
+          <Text dimColor>
+            {open[key] ? '⌄' : '›'} {label}
           </Text>
         </Button>
-        <Text> </Text>
-        {smallButton(`back-${row.id}`, 'vrátit', () => deferRow(row, false))}
+        <Text dimColor>{count}</Text>
       </Box>
     )
 
-    // "Odloženo (n)" folded by default; one switch for every PC's section.
-    const deferredHeading = (key: string, count: number) => (
-      <Box key={key} paddingLeft={3} marginTop={1}>
-        <Button key={key} plain dimColor onPress={() => update($, deferOpenAtom, open => !open)}>
-          <Text size="footnote" dimColor bold>
-            Odloženo ({count}) {deferOpen ? '▾' : '▸'}
-          </Text>
-        </Button>
-      </Box>
-    )
-
-    // One PC's windows: the marked ones, then "Dřív", then the folded "Odloženo".
-    const block = (key: string, list: Row[], gap: boolean) => {
-      const { top, earlier, deferred } = ordered(list, now)
+    // One PC's windows: the groups, then the folded "Dřív" and "Odloženo".
+    const block = (key: string, list: Row[]) => {
+      const { earlier, deferred } = ordered(list, now)
       return [
-        ...top.map(line),
-        ...(earlier.length ? [heading(`${key}-earlier`, 'Dřív', gap || top.length > 0)] : []),
-        ...earlier.map(earlierLine),
-        ...(deferred.length ? [deferredHeading(`${key}-deferred`, deferred.length)] : []),
-        ...(deferOpen ? deferred.map(deferredLine) : []),
+        ...groups(list, now).flatMap(g => [
+          groupHeading(`${key}-${g.key}`, g),
+          ...g.rows.map(r => windowRow(r, false, r.isRunning ? [] : ['defer', 'hide'])),
+        ]),
+        ...(earlier.length ? [foldHeading(`${key}-earlier`, 'Dřív', earlier.length)] : []),
+        ...(earlier.length && open[`${key}-earlier`] ? earlier.map(r => windowRow(r, true, ['hide'])) : []),
+        ...(deferred.length ? [foldHeading(`${key}-deferred`, 'Odloženo', deferred.length)] : []),
+        ...(deferred.length && open[`${key}-deferred`] ? deferred.map(r => windowRow(r, true, ['back'])) : []),
       ]
     }
 
+    // The optional bar: the windows by state, as the Context pane's usage bar.
+    const barParts = [...groups(rows, now).map(g => ({ n: g.rows.length, color: g.color }))]
+    barParts.push({ n: rows.length - barParts.reduce((sum, p) => sum + p.n, 0), color: COLORS.rest })
+    const barView = !bar || rows.length === 0 ? null : Svg ? (
+      <Box key="bar" marginBottom={1}>
+        <Svg source={barSvg(barParts)} alt={`Okna podle stavu: ${barParts.map(p => p.n).join(', ')}`} height={6} />
+      </Box>
+    ) : (
+      <Box key="bar" flexDirection="row" marginBottom={1}>
+        {barParts
+          .filter(p => p.n > 0)
+          .map((p, i) => (
+            <Text key={`bar-${i}`} color={p.color}>
+              {'█'.repeat(Math.max(1, Math.round((p.n / rows.length) * 30)))}
+            </Text>
+          ))}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between" marginBottom={1}>
+          <Text weight="semibold">Okna</Text>
+          <Button key="bar-switch" plain dimColor onPress={toggleBar}>
+            <Text size="footnote" dimColor>
+              {windowsCount(rows.length)}
+            </Text>
+          </Button>
+        </Box>
+        {barView}
         {info ? <Text color="red">{info}</Text> : null}
-        {block('local', rows, false)}
-        {remote.flatMap(p => [heading(`pc-${p.pc}`, p.pc, true), ...block(p.pc, p.rows, false)])}
+        {block('local', rows)}
+        {remote.flatMap(p => [
+          foldHeading(`pc-${p.pc}`, p.pc, p.rows.length),
+          ...(open[`pc-${p.pc}`] ? block(p.pc, p.rows) : []),
+        ])}
         {sync ? (
-          <Box paddingLeft={3} marginTop={1}>
+          <Box marginTop={1}>
             <Text size="caption" dimColor>
               {sync}
             </Text>

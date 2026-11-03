@@ -22,6 +22,7 @@ export type RemotePc = { pc: string; at: number; rows: Row[] }
 
 declare module 'claude-code' {
   interface PluginState {
-    okna: { rows: Row[]; info: string; remote: RemotePc[]; sync: string; deferOpen: boolean }
+    // open: which folded sections are open, by key; bar: whether the state bar is drawn.
+    okna: { rows: Row[]; info: string; remote: RemotePc[]; sync: string; open: Record<string, boolean>; bar: boolean }
   }
 }
