@@ -531,30 +531,35 @@ export const register: Register = on => {
         </Box>
       )
 
+    // A narrow pane: the left side shrinks and cuts its text with "…"; what is on the right never shrinks.
+    const shrinking = { flexShrink: 1, flexGrow: 1, minWidth: 0, overflow: 'hidden' } as const
+
     // One window: title on the left (bold while unread), its age on the right, the
     // buttons beside the title under the pointer; a waiting window adds its question.
     const windowRow = (row: Row, dim: boolean, kinds: ('defer' | 'hide' | 'back')[]) => {
       const left = cacheLeftMin(row, now)
       return (
-        <Box key={row.id} flexDirection="column" paddingLeft={3}>
+        <Box key={row.id} flexDirection="column" paddingLeft={3} minWidth={0}>
           <Box key={`row-${row.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
-            <Box flexDirection="row" flexShrink={1}>
+            <Box flexDirection="row" {...shrinking}>
               <Button key={row.id} plain onPress={() => openRow(row)}>
-                <Text dimColor={dim} weight={row.unread ? 'semibold' : 'regular'}>
+                <Text dimColor={dim} weight={row.unread ? 'semibold' : 'regular'} wrap="truncate-end">
                   {row.title}
                 </Text>
               </Button>
               {actions(row, kinds)}
             </Box>
-            {left !== null && !dim ? (
-              <Text color={COLORS.cache}>za {left} min</Text>
-            ) : (
-              <Text dimColor>{age(row.lastActivityAt, now)}</Text>
-            )}
+            <Box flexShrink={0}>
+              {left !== null && !dim ? (
+                <Text color={COLORS.cache}>za {left} min</Text>
+              ) : (
+                <Text dimColor>{age(row.lastActivityAt, now)}</Text>
+              )}
+            </Box>
           </Box>
           {row.waiting && row.snippet && !dim ? (
-            <Box paddingLeft={2}>
-              <Text size="footnote" dimColor>
+            <Box paddingLeft={2} minWidth={0}>
+              <Text size="footnote" dimColor wrap="wrap">
                 {short(row.snippet)}
               </Text>
             </Box>
@@ -565,24 +570,32 @@ export const register: Register = on => {
 
     // A group as in the Context pane: color square, name, count on the right.
     const groupHeading = (key: string, group: Group) => (
-      <Box key={`g-${key}`} flexDirection="row" justifyContent="space-between" marginTop={1}>
-        <Text>
-          <Text color={group.color}>■ </Text>
-          <Text weight="medium">{group.label}</Text>
-        </Text>
-        <Text dimColor>{group.rows.length}</Text>
+      <Box key={`g-${key}`} flexDirection="row" justifyContent="space-between" gap={1} marginTop={1}>
+        <Box {...shrinking}>
+          <Text wrap="truncate-end">
+            <Text color={group.color}>■ </Text>
+            <Text weight="medium">{group.label}</Text>
+          </Text>
+        </Box>
+        <Box flexShrink={0}>
+          <Text dimColor>{group.rows.length}</Text>
+        </Box>
       </Box>
     )
 
     // A folded section: "› Dřív" on the left, its count on the right.
     const foldHeading = (key: string, label: string, count: number) => (
-      <Box key={`f-${key}`} flexDirection="row" justifyContent="space-between" marginTop={1}>
-        <Button key={`f-${key}`} plain dimColor onPress={() => toggle(key)}>
-          <Text dimColor>
-            {open[key] ? '⌄' : '›'} {label}
-          </Text>
-        </Button>
-        <Text dimColor>{count}</Text>
+      <Box key={`f-${key}`} flexDirection="row" justifyContent="space-between" gap={1} marginTop={1}>
+        <Box {...shrinking}>
+          <Button key={`f-${key}`} plain dimColor onPress={() => toggle(key)}>
+            <Text dimColor wrap="truncate-end">
+              {open[key] ? '⌄' : '›'} {label}
+            </Text>
+          </Button>
+        </Box>
+        <Box flexShrink={0}>
+          <Text dimColor>{count}</Text>
+        </Box>
       </Box>
     )
 

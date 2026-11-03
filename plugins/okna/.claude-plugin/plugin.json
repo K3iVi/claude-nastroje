@@ -1,6 +1,6 @@
 {
   "name": "okna",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": { "name": "K3iVi" },
   "description": "Panel s přehledem oken Claude: čeká na odpověď, pracuje, ostatní podle aktivity; nepřečtené; proklik",
   "types": "./types/index.d.ts"

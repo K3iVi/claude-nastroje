@@ -81,6 +81,19 @@ test('the bar, when switched on: an SVG on desktop, blocks on the terminal', asy
   await terminal.unmount()
 })
 
+test('a narrow pane cuts titles with an ellipsis and keeps the ages whole', async ($, on) => {
+  seed(on, false)
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, bodyColumns: 20 } })
+    expect((await ui.find({ type: 'Text', text: /^Generátor smluv$/ }))?.props.wrap).toBe('truncate-end')
+    expect((await ui.find({ type: 'Text', text: /Mám to nasadit/ }))?.props.wrap).toBe('wrap')
+    // The age sits in a Box that never shrinks.
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('{"flexShrink":0},"children":[{"type":"Text","props":{"color":"#E24B4A"},"children":["za "')
+    await ui.unmount()
+  }
+})
+
 test('every surface draws the pane', async ($, on) => {
   seed(on, true)
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
