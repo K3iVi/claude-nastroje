@@ -12,7 +12,7 @@ Po instalaci restartuj Claude.
 
 ## okna — panel s přehledem oken
 
-V každém okně ukáže panel se seznamem ostatních oken. Nahoře jsou okna, která čekají na odpověď, pracují, mají něco nepřečteného nebo jim do 15 minut končí cache (červeně). Pod nimi je, co bylo hotové za poslední týden. Klik okno otevře, „skrýt“ ho schová do jeho další aktivity. Příkaz `/okna` vypíše totéž do chatu, hodí se třeba přes Remote Control z mobilu.
+V každém okně ukáže panel se seznamem ostatních oken. Nahoře jsou okna, která čekají na odpověď, pracují, mají něco nepřečteného nebo jim do 15 minut končí cache (červeně). Pod nimi je, co bylo hotové za poslední týden. Klik okno otevře, „skrýt“ ho schová do jeho další aktivity. „odložit“ přesune okno, které teď počká, do sbalené sekce „Odloženo“ bez tečky. Nahoru se vrátí, až do něj něco napíšeš (compact se nepočítá), nebo tlačítkem „vrátit“. Příkaz `/okna` vypíše totéž do chatu, hodí se třeba přes Remote Control z mobilu.
 
 Běží celý uvnitř Claude, bez PowerShellu a Plánovače. Nic nikam neposílá. Výjimkou je přenos mezi PC: ten zapne jen soubor `%USERPROFILE%\.claude\okna-sync.json` s `{"url": "https://…", "key": "…"}`, a to na vlastní server, který si každý provozuje sám.
 

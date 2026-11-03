@@ -21,6 +21,11 @@ const rowsAtom = atom({ plugin: 'okna', key: 'rows' } as const, [] as Row[])
 const infoAtom = atom({ plugin: 'okna', key: 'info' } as const, '')
 const remoteAtom = atom({ plugin: 'okna', key: 'remote' } as const, [] as RemotePc[])
 const syncAtom = atom({ plugin: 'okna', key: 'sync' } as const, '')
+const deferOpenAtom = atom({ plugin: 'okna', key: 'deferOpen' } as const, false)
+
+// Deferred windows, by the reply they had then: this PC's by turn, another PC's by activity.
+type Deferred = Record<string, string>
+const deferMark = (row: Row) => row.turn || row.lastActivityAt
 
 type Session = {
   sessionId: string
@@ -185,6 +190,7 @@ async function exchange($: EngineInterface, rows: Row[]): Promise<RemotePc[]> {
   const pcs = (JSON.parse(res.text) as { pcs: { pc: string; at: number; rows: SentRow[] }[] }).pcs
   const seen = ((await $.store.get('remote-seen')) as Record<string, string> | undefined) ?? {}
   const hidden = ((await $.store.get('hidden')) as Record<string, string> | undefined) ?? {}
+  const deferred = ((await $.store.get('deferred')) as Deferred | undefined) ?? {}
   return pcs
     .filter(p => p.rows.length)
     .map(p => ({
@@ -194,7 +200,16 @@ async function exchange($: EngineInterface, rows: Row[]): Promise<RemotePc[]> {
         .map(r => {
           const id = `${p.pc}|${r.title}`
           const rcLink = RC_LINK.test(r.rcLink) ? r.rcLink : ''
-          return { ...r, id, link: rcLink, rcLink, rc: rcLink !== '', unread: r.unread && seen[id] !== r.lastActivityAt }
+          return {
+            ...r,
+            id,
+            link: rcLink,
+            rcLink,
+            rc: rcLink !== '',
+            unread: r.unread && seen[id] !== r.lastActivityAt,
+            turn: '',
+            deferred: !r.isRunning && deferred[id] === r.lastActivityAt,
+          }
         })
         .filter(r => hidden[r.id] !== r.lastActivityAt),
     }))
@@ -231,6 +246,7 @@ async function refresh($: EngineInterface, force = false) {
       const verdicts = ((await $.store.get('verdicts-v3')) as Record<string, Verdict> | undefined) ?? {}
       // Windows the user hid, by the activity they had then: new activity brings them back.
       const hidden = ((await $.store.get('hidden')) as Record<string, string> | undefined) ?? {}
+      const deferred = ((await $.store.get('deferred')) as Deferred | undefined) ?? {}
       const rows: Row[] = []
       for (const s of sessions) {
         if (hidden[s.sessionId] === s.lastActivityAt) continue
@@ -268,7 +284,10 @@ async function refresh($: EngineInterface, force = false) {
           ? (record ?? (await readRecord($, dirs, s.sessionId)))?.bridgeSessionIds
           : undefined
         const rcLink = bridge?.length ? `claude://claude.ai/code/${bridge[bridge.length - 1]}` : ''
+        const turn = record?.lastAssistantUuid ?? ''
         rows.push({
+          turn,
+          deferred: !s.isRunning && deferred[s.sessionId] === (turn || s.lastActivityAt),
           id: s.sessionId,
           title: s.title,
           link: s.link ?? '',
@@ -288,6 +307,14 @@ async function refresh($: EngineInterface, force = false) {
         ...Object.fromEntries(Object.entries(hidden).filter(([id]) => id.includes('|')).slice(-200)),
         ...Object.fromEntries(
           sessions.filter(s => hidden[s.sessionId] === s.lastActivityAt).map(s => [s.sessionId, s.lastActivityAt]),
+        ),
+      })
+      await $.store.set('deferred', {
+        // Another PC's windows stay deferred by title; this PC's until the user writes into them. A running
+        // window may be only compacting, so it keeps its mark until the turn shows whether it replied.
+        ...Object.fromEntries(Object.entries(deferred).filter(([id]) => id.includes('|')).slice(-200)),
+        ...Object.fromEntries(
+          rows.filter(r => deferred[r.id] !== undefined && (r.isRunning || r.deferred)).map(r => [r.id, deferred[r.id]]),
         ),
       })
       let remote = snapshot?.remote ?? []
@@ -322,23 +349,26 @@ const byActivity =(a: Row, b: Row) => Date.parse(b.lastActivityAt) - Date.parse(
 const short = (text: string) => (text.length > 90 ? `${text.slice(0, 89)}…` : text)
 
 // A row with a dot wants a look: waiting, working, unread or its cache ending.
+// A deferred window wants nothing until the user writes into it.
 const marked = (row: Row, now: number) =>
-  row.waiting || row.isRunning || row.unread || cacheLeftMin(row, now) !== null
+  !row.deferred && (row.waiting || row.isRunning || row.unread || cacheLeftMin(row, now) !== null)
 
 // Top: waiting, then running, then the other marked ones. Below: the seen and
-// done windows of the last week, newest first.
-function ordered(rows: Row[], now: number): { top: Row[]; earlier: Row[] } {
-  const waiting = rows.filter(r => r.waiting).sort(byActivity)
-  const running = rows.filter(r => r.isRunning).sort(byActivity)
-  const other = rows.filter(r => !r.waiting && !r.isRunning && marked(r, now)).sort(byActivity)
-  const earlier = rows.filter(r => !marked(r, now)).sort(byActivity).slice(0, EARLIER_MAX_ROWS)
-  return { top: [...waiting, ...running, ...other], earlier }
+// done windows of the last week, newest first. Deferred ones apart.
+function ordered(rows: Row[], now: number): { top: Row[]; earlier: Row[]; deferred: Row[] } {
+  const deferred = rows.filter(r => r.deferred).sort(byActivity)
+  const live = rows.filter(r => !r.deferred)
+  const waiting = live.filter(r => r.waiting).sort(byActivity)
+  const running = live.filter(r => r.isRunning).sort(byActivity)
+  const other = live.filter(r => !r.waiting && !r.isRunning && marked(r, now)).sort(byActivity)
+  const earlier = live.filter(r => !marked(r, now)).sort(byActivity).slice(0, EARLIER_MAX_ROWS)
+  return { top: [...waiting, ...running, ...other], earlier, deferred }
 }
 
 // The list as plain text, for a surface without the pane (Remote Control, phone).
 function asText(rows: Row[], remote: RemotePc[], now: number): string {
   const block = (list: Row[]) => {
-    const { top, earlier } = ordered(list, now)
+    const { top, earlier, deferred } = ordered(list, now)
     const lines = top.map(r => {
       const state = r.waiting ? 'ČEKÁ' : r.isRunning ? 'PRACUJE' : r.unread ? 'NOVÉ' : 'CACHE'
       const ask = r.waiting && r.snippet ? ` — ${short(r.snippet)}` : ''
@@ -346,6 +376,9 @@ function asText(rows: Row[], remote: RemotePc[], now: number): string {
     })
     if (earlier.length) {
       lines.push('', 'Dřív:', ...earlier.map(r => `- ${r.title} · ${age(r.lastActivityAt, now)}`))
+    }
+    if (deferred.length) {
+      lines.push('', `Odloženo (${deferred.length}):`, ...deferred.map(r => `- ${r.title} · ${age(r.lastActivityAt, now)}`))
     }
     return lines
   }
@@ -379,6 +412,7 @@ export const register: Register = on => {
     const info = await read($, infoAtom)
     const remote = await read($, remoteAtom)
     const sync = await read($, syncAtom)
+    const deferOpen = await read($, deferOpenAtom)
     const now = await $.clock.now()
 
     // Applies `fn` to the row's list, this PC's or the other PC's it came from.
@@ -405,13 +439,23 @@ export const register: Register = on => {
       await editList(row, list => list.filter(r => r.id !== row.id))
     }
 
-    const hideButton = (row: Row) => (
-      <Button key={`hide-${row.id}`} plain dimColor onPress={() => hideRow(row)}>
+    // Down to "Odloženo" until the user writes into the window, or puts it back himself.
+    async function deferRow(row: Row, defer: boolean) {
+      const deferred = ((await $.store.get('deferred')) as Deferred | undefined) ?? {}
+      const { [row.id]: _, ...rest } = deferred
+      await $.store.set('deferred', defer ? { ...rest, [row.id]: deferMark(row) } : rest)
+      await editList(row, list => list.map(r => (r.id === row.id ? { ...r, deferred: defer } : r)))
+    }
+
+    const smallButton = (key: string, label: string, onPress: () => Promise<void>) => (
+      <Button key={key} plain dimColor onPress={onPress}>
         <Text size="caption" dimColor>
-          skrýt
+          {label}
         </Text>
       </Button>
     )
+    const hideButton = (row: Row) => smallButton(`hide-${row.id}`, 'skrýt', () => hideRow(row))
+    const deferButton = (row: Row) => smallButton(`defer-${row.id}`, 'odložit', () => deferRow(row, true))
 
 
     // One clickable row per window, as the mobile list: state mark, title, age;
@@ -432,6 +476,8 @@ export const register: Register = on => {
               <Text color="red"> cache končí za {cacheLeftMin(row, now)} min</Text>
             )}
           </Button>
+          {row.isRunning ? null : <Text> </Text>}
+          {row.isRunning ? null : deferButton(row)}
           {row.isRunning ? null : <Text> </Text>}
           {row.isRunning ? null : hideButton(row)}
         </Box>
@@ -464,13 +510,39 @@ export const register: Register = on => {
       </Box>
     )
 
-    // One PC's windows: the marked ones, then "Dřív".
+    // A deferred window: one dim line with "vrátit", shown only with the section open.
+    const deferredLine = (row: Row) => (
+      <Box key={row.id} flexDirection="row" paddingLeft={3}>
+        <Button key={row.id} onPress={() => openRow(row)}>
+          <Text size="footnote" dimColor>
+            {row.title} · {age(row.lastActivityAt, now)}
+          </Text>
+        </Button>
+        <Text> </Text>
+        {smallButton(`back-${row.id}`, 'vrátit', () => deferRow(row, false))}
+      </Box>
+    )
+
+    // "Odloženo (n)" folded by default; one switch for every PC's section.
+    const deferredHeading = (key: string, count: number) => (
+      <Box key={key} paddingLeft={3} marginTop={1}>
+        <Button key={key} plain dimColor onPress={() => update($, deferOpenAtom, open => !open)}>
+          <Text size="footnote" dimColor bold>
+            Odloženo ({count}) {deferOpen ? '▾' : '▸'}
+          </Text>
+        </Button>
+      </Box>
+    )
+
+    // One PC's windows: the marked ones, then "Dřív", then the folded "Odloženo".
     const block = (key: string, list: Row[], gap: boolean) => {
-      const { top, earlier } = ordered(list, now)
+      const { top, earlier, deferred } = ordered(list, now)
       return [
         ...top.map(line),
         ...(earlier.length ? [heading(`${key}-earlier`, 'Dřív', gap || top.length > 0)] : []),
         ...earlier.map(earlierLine),
+        ...(deferred.length ? [deferredHeading(`${key}-deferred`, deferred.length)] : []),
+        ...(deferOpen ? deferred.map(deferredLine) : []),
       ]
     }
 
