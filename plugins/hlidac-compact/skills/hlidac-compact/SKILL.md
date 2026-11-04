@@ -20,6 +20,9 @@ Všechno spouštěj přes PowerShell tool: `powershell -NoProfile -ExecutionPoli
 
 Ostrý režim po zkoušce na sucho zapneš tak, že `instaluj.ps1` spustíš znovu bez `-NaSucho`.
 
+## Aktualizace
+Hlídač běží z kopie v `%USERPROFILE%\.claude\hlidac-compact`, takže nová verze pluginu ho sama nezmění. Při „aktualizuj hlídač compactu“ zjisti z úlohy Plánovače, jestli běží na sucho (`-Ostre` v `spust-skryte.vbs` chybí), a spusť `instaluj.ps1` znovu ve stejném režimu. Log a stav zůstanou.
+
 ## Stav
 - Posledních 30 řádků logu: `Get-Content "$env:USERPROFILE\.claude\hlidac-compact\hlidac.log" -Tail 30`.
 - Řádky logu znamenají:

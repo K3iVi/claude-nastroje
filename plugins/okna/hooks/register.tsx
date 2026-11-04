@@ -11,6 +11,8 @@ const SESSIONS = 'ccd_session_mgmt'
 const EARLIER_MAX_ROWS = 15
 const CACHE_TTL_MS = 3_600_000
 const CACHE_WARN_MIN = 15
+// A question the user has seen and left for a day stops counting as waiting.
+const WAIT_EXPIRE_MS = 24 * 3_600_000
 const HIDDEN_TITLE = /^RC hlídač/i
 // Optional: several PCs trade their window lists through your own server. ~/.claude/okna-sync.json
 // holds {"url": "https://…/api/okna", "key": "…"}; without it the pane shows this PC only and sends nothing.
@@ -41,13 +43,31 @@ type Session = {
 type Verdict = { at: string; waiting: boolean; snippet: string }
 
 // One poll serves every window: the window that polls leaves the result in the
-// plugin's store, and the others draw it while it is fresh.
+// plugin's store, and the others draw it while it is fresh. list_sessions leaves out
+// the window that asks, so the poll adds that window itself, and each window drops its own row.
 type Snapshot = { at: number; rows: Row[]; info: string; remote?: RemotePc[]; sync?: string }
+
+// When each window last replied, by its reply: a compact or the app's housekeeping
+// moves the window's times but not its reply, so neither counts as work.
+type Replies = Record<string, { turn: string; at: number }>
 
 let isRefreshing = false
 
+// This window's own id; '' until known.
+let selfId = ''
+
+async function findSelf($: EngineInterface): Promise<Session | undefined> {
+  const res = await $.mcp.call(SESSIONS, 'get_session', { session_id: 'self' })
+  if (res.isError) return undefined
+  const self = JSON.parse(textOf(res)) as Session
+  selfId = self.sessionId
+  return self
+}
+
+const notSelf = (rows: Row[]) => rows.filter(r => r.id !== selfId)
+
 const WAIT_RE =
-  /nasaď|schval|souhlas|tvoje ok|tvé ok|čekám na tebe|čeká na tebe|na tvoji|na tvou|potřebuju od tebe|potřebuji od tebe|rozhodni|vyber si|mám to udělat|mám pokračovat/i
+  /(?<!\p{L})(nasaď|schválíš|schválit|tvoje ok|tvé ok|čekám na tebe|čeká na tebe|potřebuju od tebe|potřebuji od tebe|rozhodni|vyber si|mám to udělat|mám pokračovat)(?!\p{L})/iu
 
 function textOf(result: { content: { type: string; text?: string }[] }): string {
   return result.content.map(block => (block.type === 'text' ? block.text ?? '' : '')).join('')
@@ -74,7 +94,8 @@ function classify(text: string): { waiting: boolean; snippet: string } {
     .map(line => line.replace(/^[-*>#\s]+/, '').replace(/\*\*/g, '').trim())
     .filter(Boolean)
     // The closing commit/push status lines say nothing about what is asked.
-    .filter(line => !/^(necommitnuté|nepushnuté|uncommitted|unpushed)\b/i.test(line))
+    // (Not \b: it is ASCII-only and finds no edge after the "é" of these words.)
+    .filter(line => !/^(necommitnuté|nepushnuté|uncommitted|unpushed)(?!\p{L})/iu.test(line))
   // Only the closing lines count: a question quoted mid-reply is not one for the user.
   const closing = lines.slice(-3)
   const waiting = closing.some(line => /\?$/.test(line) || WAIT_RE.test(line))
@@ -83,6 +104,7 @@ function classify(text: string): { waiting: boolean; snippet: string } {
 }
 
 function age(iso: string, now: number): string {
+  if (Number.isNaN(Date.parse(iso))) return ''
   const min = Math.max(0, Math.round((now - Date.parse(iso)) / 60_000))
   if (min < 60) return `${min} min`
   const hours = Math.round(min / 60)
@@ -91,14 +113,16 @@ function age(iso: string, now: number): string {
 }
 
 // The app keeps a record per window, Claude-Data/claude_*/claude-code-sessions/<account>/<org>/local_<id>.json,
-// holding the wrap-up box (turnWrapUp.needsUser: its question), the app's own verdict on
-// the last turn (postTurnSummary, 'blocked' when it wants the user) and lastFocusedAt (the
-// sidebar's unread dot). Not a published interface: read defensively, fall back when absent.
+// holding the app's own verdict on the last turn (postTurnSummary, 'blocked' when it wants
+// the user) and lastFocusedAt (the sidebar's unread dot). Its turnWrapUp holds only the recap,
+// never the question. Not a published interface: read defensively, fall back when absent.
 type AppRecord = {
-  turnWrapUp?: { needsUser?: string } | null
   postTurnSummary?: { status_category?: string; status_detail?: string; needs_action?: string; summarizes_uuid?: string } | null
   lastAssistantUuid?: string
   lastFocusedAt?: number
+  // When the window's last turn ended (a compact's too). The app's lastActivityAt also moves
+  // on its own housekeeping writes, hours after the last turn, so it says nothing of the user's work.
+  lastTurnEdgeAt?: number
   // Remote Control sessions of the window, the current one last.
   bridgeSessionIds?: string[]
 }
@@ -125,7 +149,8 @@ async function findRecordDirs($: EngineInterface): Promise<string[]> {
   } catch {
     // No records found: every window falls back to the transcript.
   }
-  recordDirs = dirs
+  // Kept only when found, so a failed look is tried again at the next poll.
+  if (dirs.length) recordDirs = dirs
   return dirs
 }
 
@@ -221,9 +246,13 @@ async function refresh($: EngineInterface, force = false) {
     if (!(await $.ui.panes()).some(pane => pane.id === PANE)) return
     isRefreshing = true
     try {
+      // The folded sections as last opened or closed in any window.
+      const open = (await $.store.get('open')) as Record<string, boolean> | undefined
+      if (open) await update($, openAtom, () => open)
       const snapshot = (await $.store.get('snapshot')) as Snapshot | undefined
       if (!force && snapshot && (await $.clock.now()) - snapshot.at < POLL_MS - 2_000) {
-        await update($, rowsAtom, () => snapshot.rows)
+        if (!selfId) await findSelf($)
+        await update($, rowsAtom, () => notSelf(snapshot.rows))
         await update($, infoAtom, () => snapshot.info)
         await update($, remoteAtom, () => snapshot.remote ?? [])
         await update($, syncAtom, () => snapshot.sync ?? '')
@@ -235,12 +264,10 @@ async function refresh($: EngineInterface, force = false) {
         await update($, infoAtom, () => `Seznam oken nejde načíst: ${textOf(listed).slice(0, 200)}`)
         return
       }
+      const self = await findSelf($)
       const now = await $.clock.now()
-      const sessions = (JSON.parse(textOf(listed)) as Session[]).filter(
-        s =>
-          !s.isArchived &&
-          !HIDDEN_TITLE.test(s.title) &&
-          now - Date.parse(s.lastActivityAt) < MAX_AGE_DAYS * 86_400_000,
+      const sessions = [...(JSON.parse(textOf(listed)) as Session[]), ...(self ? [self] : [])].filter(
+        s => !s.isArchived && !HIDDEN_TITLE.test(s.title),
       )
 
       const dirs = await findRecordDirs($)
@@ -248,24 +275,32 @@ async function refresh($: EngineInterface, force = false) {
       // Windows the user hid, by the activity they had then: new activity brings them back.
       const hidden = ((await $.store.get('hidden')) as Record<string, string> | undefined) ?? {}
       const deferred = ((await $.store.get('deferred')) as Deferred | undefined) ?? {}
+      const replies = ((await $.store.get('replies')) as Replies | undefined) ?? {}
+      // Each window's activity as the rows show it: now while running, else its last reply.
+      const activity: Record<string, string> = {}
       const rows: Row[] = []
       for (const s of sessions) {
-        if (hidden[s.sessionId] === s.lastActivityAt) continue
         const record = s.isRunning ? undefined : await readRecord($, dirs, s.sessionId)
+        const turn = record?.lastAssistantUuid ?? ''
+        if (!s.isRunning) {
+          const edge = record?.lastTurnEdgeAt || Date.parse(s.lastActivityAt)
+          if (!turn || replies[s.sessionId]?.turn !== turn) replies[s.sessionId] = { turn, at: edge }
+        }
+        const repliedAt = s.isRunning ? Date.parse(s.lastActivityAt) : (replies[s.sessionId]?.at ?? 0)
+        const act = new Date(repliedAt).toISOString()
+        activity[s.sessionId] = act
+        if (now - repliedAt > MAX_AGE_DAYS * 86_400_000) continue
+        if (hidden[s.sessionId] === act) continue
         let waiting = false
         let snippet = ''
         const summary = record?.postTurnSummary
         if (summary?.status_category && summary.summarizes_uuid === record?.lastAssistantUuid) {
           // The app's verdict on the window's last turn, the one its sidebar goes by.
           waiting = summary.status_category === 'blocked'
-          snippet = waiting ? record?.turnWrapUp?.needsUser || summary.needs_action || summary.status_detail || '' : ''
-        } else if (record?.turnWrapUp) {
-          // The app's own record: the wrap-up box's question, verbatim.
-          snippet = record.turnWrapUp.needsUser ?? ''
-          waiting = snippet !== ''
+          snippet = waiting ? summary.needs_action || summary.status_detail || '' : ''
         } else if (!s.isRunning) {
           // No record of the box: guess from the transcript's closing lines.
-          if (verdicts[s.sessionId]?.at !== s.lastActivityAt) {
+          if (verdicts[s.sessionId]?.at !== act) {
             const events = await $.mcp.call(SESSIONS, 'list_events', { session_id: s.sessionId, limit: 8 })
             const transcript = events.isError ? '' : textOf(events)
             // A turn closing on the wrap-up box with no message after it asks in the box.
@@ -273,27 +308,31 @@ async function refresh($: EngineInterface, force = false) {
             const verdict = endsInBox
               ? { waiting: true, snippet: 'Otázka je v rámečku „Další krok“ v okně' }
               : classify(lastAssistantText(transcript))
-            verdicts[s.sessionId] = { at: s.lastActivityAt, ...verdict }
+            verdicts[s.sessionId] = { at: act, ...verdict }
           }
           waiting = verdicts[s.sessionId]?.waiting ?? false
           snippet = verdicts[s.sessionId]?.snippet ?? ''
         }
-        // Unread as the app's sidebar has it: activity since the user last had the window in front.
-        const unread =
-          !s.isRunning && record?.lastFocusedAt !== undefined && Date.parse(s.lastActivityAt) > record.lastFocusedAt
+        // Seen since the reply and left a day: the user has decided it can wait.
+        const seen = record?.lastFocusedAt !== undefined && record.lastFocusedAt > repliedAt
+        if (waiting && seen && now - repliedAt > WAIT_EXPIRE_MS) {
+          waiting = false
+          snippet = ''
+        }
+        // Unread: a reply since the user last had the window in front (a compact is not one).
+        const unread = !s.isRunning && record?.lastFocusedAt !== undefined && !seen
         const bridge = s.remoteControlActive
           ? (record ?? (await readRecord($, dirs, s.sessionId)))?.bridgeSessionIds
           : undefined
         const rcLink = bridge?.length ? `claude://claude.ai/code/${bridge[bridge.length - 1]}` : ''
-        const turn = record?.lastAssistantUuid ?? ''
         rows.push({
           turn,
-          deferred: !s.isRunning && deferred[s.sessionId] === (turn || s.lastActivityAt),
+          deferred: !s.isRunning && deferred[s.sessionId] === (turn || act),
           id: s.sessionId,
           title: s.title,
           link: s.link ?? '',
           isRunning: s.isRunning,
-          lastActivityAt: s.lastActivityAt,
+          lastActivityAt: act,
           waiting: !s.isRunning && waiting,
           snippet,
           unread,
@@ -303,21 +342,29 @@ async function refresh($: EngineInterface, force = false) {
       }
       const live = new Set(sessions.map(s => s.sessionId))
       await $.store.set('verdicts-v3', Object.fromEntries(Object.entries(verdicts).filter(([id]) => live.has(id))))
+      await $.store.set('replies', Object.fromEntries(Object.entries(replies).filter(([id]) => live.has(id))))
+      // Read again: a click to hide or defer while this poll ran must not be lost.
+      const hiddenNow = ((await $.store.get('hidden')) as Record<string, string> | undefined) ?? {}
+      const deferredNow = ((await $.store.get('deferred')) as Deferred | undefined) ?? {}
       await $.store.set('hidden', {
         // Another PC's windows ('PC|title') stay hidden until that window moves; this PC's until gone.
-        ...Object.fromEntries(Object.entries(hidden).filter(([id]) => id.includes('|')).slice(-200)),
+        ...Object.fromEntries(Object.entries(hiddenNow).filter(([id]) => id.includes('|')).slice(-200)),
         ...Object.fromEntries(
-          sessions.filter(s => hidden[s.sessionId] === s.lastActivityAt).map(s => [s.sessionId, s.lastActivityAt]),
+          sessions
+            .filter(s => hiddenNow[s.sessionId] === activity[s.sessionId])
+            .map(s => [s.sessionId, activity[s.sessionId]]),
         ),
       })
+      for (const r of rows) r.deferred = !r.isRunning && deferredNow[r.id] === deferMark(r)
       await $.store.set('deferred', {
         // Another PC's windows stay deferred by title; this PC's until the user writes into them. A running
         // window may be only compacting, so it keeps its mark until the turn shows whether it replied.
-        ...Object.fromEntries(Object.entries(deferred).filter(([id]) => id.includes('|')).slice(-200)),
+        ...Object.fromEntries(Object.entries(deferredNow).filter(([id]) => id.includes('|')).slice(-200)),
         ...Object.fromEntries(
-          rows.filter(r => deferred[r.id] !== undefined && (r.isRunning || r.deferred)).map(r => [r.id, deferred[r.id]]),
+          rows.filter(r => deferredNow[r.id] !== undefined && (r.isRunning || r.deferred)).map(r => [r.id, deferredNow[r.id]]),
         ),
       })
+      rows.splice(0, rows.length, ...rows.filter(r => hiddenNow[r.id] !== r.lastActivityAt))
       let remote = snapshot?.remote ?? []
       let sync = ''
       try {
@@ -325,7 +372,7 @@ async function refresh($: EngineInterface, force = false) {
       } catch (error) {
         sync = `Druhé PC: ${String(error).slice(0, 120)}`
       }
-      await update($, rowsAtom, () => rows)
+      await update($, rowsAtom, () => notSelf(rows))
       await update($, infoAtom, () => '')
       await update($, remoteAtom, () => remote)
       await update($, syncAtom, () => sync)
@@ -465,7 +512,14 @@ export const register: Register = on => {
     async function editList(row: Row, fn: (list: Row[]) => Row[]) {
       if (isRemote(row)) await update($, remoteAtom, pcs => pcs.map(p => ({ ...p, rows: fn(p.rows) })))
       else await update($, rowsAtom, fn)
-      await $.store.set('snapshot', { at: 0, rows: [], info: '' })
+      // Stale, so the next poll runs; its rows stay for the windows drawing it meanwhile.
+      const snapshot = (await $.store.get('snapshot')) as Snapshot | undefined
+      await $.store.set('snapshot', {
+        ...(snapshot ?? { rows: [], info: '' }),
+        at: 0,
+        rows: isRemote(row) ? (snapshot?.rows ?? []) : fn(snapshot?.rows ?? []),
+        remote: (snapshot?.remote ?? []).map(p => ({ ...p, rows: isRemote(row) ? fn(p.rows) : p.rows })),
+      })
     }
 
     // Another PC's window opens through its Remote Control link, and only a link of that shape.
@@ -494,7 +548,12 @@ export const register: Register = on => {
     }
 
     // Folded sections ("Dřív", "Odloženo", another PC) open and close by their key.
-    const toggle = (key: string) => update($, openAtom, open => ({ ...open, [key]: !open[key] }))
+    // Kept across windows and sessions: each poll takes the store's.
+    async function toggle(key: string) {
+      const next = { ...open, [key]: !open[key] }
+      await $.store.set('open', next)
+      await update($, openAtom, () => next)
+    }
 
     // The bar's own switch: the window count in the header; kept across sessions.
     async function toggleBar() {

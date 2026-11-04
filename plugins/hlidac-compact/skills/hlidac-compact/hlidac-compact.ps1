@@ -24,7 +24,19 @@ public static class HcWin {
   [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LII p);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   public static uint IdleMs() { var l = new LII(); l.cbSize = 8; GetLastInputInfo(ref l); return (uint)Environment.TickCount - l.dwTime; }
+  // Windows lets a background process take the foreground only right after a key press of its own:
+  // a lone Alt (down, up) is that press and types nothing.
+  public static bool Dopredu(IntPtr h) {
+    if (h == IntPtr.Zero) return false;
+    if (IsIconic(h)) ShowWindow(h, 9);
+    keybd_event(0x12, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    return SetForegroundWindow(h);
+  }
 }
 "@
 
@@ -77,7 +89,8 @@ if (Test-Path $stavSoubor) { (Get-Content $stavSoubor -Raw | ConvertFrom-Json).P
 $ted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $okna = @(NactiOkna | Where-Object { -not $_.archiv })
 $kandidati = foreach ($o in $okna) {
-  $posl = [Math]::Max($o.edge, $o.akt)
+  # konec posledniho tahu; lastActivityAt posouvaji i uklidove zapisy aplikace hodiny po tahu
+  $posl = if ($o.edge -gt 0) { $o.edge } else { $o.akt }
   $min = ($ted - $posl) / 60000
   if ($min -lt $OdMin -or $min -gt $DoMin) { continue }
   if ($stav[$o.id] -eq $posl) { continue }      # tuhle pauzu uz jsme resili
@@ -114,10 +127,17 @@ foreach ($k in $kandidati) {
   if (-not $Ostre) { Log "NA SUCHO by kompaktoval: $popis"; $stav[$o.id] = $k.posl; continue }
 
   $predtim = $okna | Sort-Object focus -Descending | Select-Object -First 1
+  $predtimFg = [HcWin]::GetForegroundWindow()    # aplikace vpredu pred zasahem (treba Chrome)
+  if ((FgProces) -eq 'claude') { $predtimFg = [IntPtr]::Zero }   # Claude vrati odkaz na predchozi okno
+  $claudeWin = Get-Process -Name claude -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } |
+    Select-Object -First 1 -ExpandProperty MainWindowHandle
   $start = [Environment]::TickCount
   # sahl uzivatel na klavesnici/mys od zacatku zasahu? (necinnost kratsi nez doba zasahu)
   function Sahl { [HcWin]::IdleMs() -lt ([Environment]::TickCount - $start) }
-  function Vrat { if ($predtim -and $predtim.id -ne $o.id) { Start-Process "claude://claude.ai/epitaxy/$($predtim.id)" } }
+  function Vrat {
+    if ($predtim -and $predtim.id -ne $o.id) { Start-Process "claude://claude.ai/epitaxy/$($predtim.id)" }
+    if ($predtimFg -ne [IntPtr]::Zero) { Start-Sleep -Milliseconds 500; [void][HcWin]::Dopredu($predtimFg) }
+  }
   Start-Process "claude://claude.ai/epitaxy/$($o.id)"
   $nahore = $null
   for ($t = 0; $t -lt 16; $t++) {        # az 4 s cekat na prepnuti, pri doteku hned pryc
@@ -127,6 +147,13 @@ foreach ($k in $kandidati) {
     if ($nahore.id -eq $o.id) { Start-Sleep -Milliseconds 500; break }
   }
   $fg = FgProces
+  if (-not (Sahl) -and $nahore.id -eq $o.id -and $fg -ne 'claude' -and $claudeWin) {
+    # okno se v Claude prepnulo, ale vpredu je jina aplikace: Claude dopredu
+    [void][HcWin]::Dopredu($claudeWin)
+    $start = [Environment]::TickCount       # Alt hlidace neni dotek uzivatele
+    Start-Sleep -Milliseconds 500
+    $fg = FgProces
+  }
   if ((Sahl) -or $nahore.id -ne $o.id -or $fg -ne 'claude') {
     Log "ZRUSENO (otevrene $($nahore.id), popredi $fg, dotek $(Sahl)): $popis"
     Vrat; Hlaska $k; continue              # stav neukladam, zkusi se pri dalsim behu
