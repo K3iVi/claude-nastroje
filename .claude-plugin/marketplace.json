@@ -1,12 +1,17 @@
 {
   "name": "claude-nastroje",
-  "owner": { "name": "K3iVi" },
+  "owner": {
+    "name": "K3iVi"
+  },
   "description": "Panel s přehledem oken a hlídač compactu pro Claude desktop na Windows",
   "plugins": [
     {
       "name": "okna",
-      "source": "./plugins/okna",
-      "description": "Panel s přehledem oken Claude desktop: čeká na vás, pracuje, nepřečtené, končící cache; proklik"
+      "source": {
+        "source": "github",
+        "repo": "K3iVi/claude-okna"
+      },
+      "description": "Panel s přehledem oken Claude desktop: čeká na tebe, pracuje, končí cache, nepřečtené; proklik; okna dalších PC (vlastní repo K3iVi/claude-okna)"
     },
     {
       "name": "hlidac-compact",
