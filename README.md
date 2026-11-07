@@ -26,9 +26,13 @@ Panel má od verze 0.6 vlastní repo **[K3iVi/claude-okna](https://github.com/K3
 
 ## hlidac-compact — compact před vypršením cache
 
-Claude drží kontext okna hodinu v prompt cache. Když se k velkému oknu vrátíš později, `/compact` (ruční i automatický) přečte celé okno znovu za plnou cenu. Hlídač to udělá ještě s platnou cache. Okno nad 200k tokenů, které je 50–57 minut nečinné, otevře, napíše do něj `/compact` a vrátí tě do okna, kde jsi byl. Sám tokeny nestojí, jde o skript spouštěný Plánovačem úloh každou minutu.
+Claude drží kontext okna hodinu v prompt cache. Když se k velkému oknu vrátíš později, `/compact` (ruční i automatický) přečte celé okno znovu za plnou cenu. Hlídač to udělá ještě s platnou cache.
 
-Instalace: v Claude napiš `/hlidac-compact` nebo „nainstaluj hlídač compactu“. Claude vysvětlí, co hlídač dělá, a nejdřív ho nainstaluje na sucho, kdy hlídač jen zapisuje do logu.
+**Od verze 2.0 hlídá přímo v okně** a stačí plugin nainstalovat. Když je okno nad 200k tokenů 50 minut po posledním tahu nečinné, plugin v něm spustí `/compact`. Funguje v Claude desktop, v terminálu i v chatu [Orca](https://github.com/stablyai/orca), kam zvenku nic napsat nejde. Když PC mezitím spalo a od tahu uběhla přes hodinu, nedělá nic, protože cache už vypršela. Okno při compactu ukáže řádek „hlídač compactu: …“. Plugin hlídá jen okna spuštěná po instalaci nebo po `/reload-plugins`.
+
+### Starší varianta: Plánovač úloh (jen Claude desktop na Windows)
+
+Okno otevře, napíše do něj `/compact` a vrátí tě do okna, kde jsi byl. S pluginem 2.0 ji nepotřebuješ. Kdybys měl obě, zkompaktuje okno ta, která přijde dřív. Instalace: v Claude napiš `/hlidac-compact` nebo „nainstaluj hlídač compactu“. Claude vysvětlí, co hlídač dělá, a nejdřív ho nainstaluje na sucho, kdy hlídač jen zapisuje do logu.
 
 - **Když na PC pracuješ,** počká. Při doteku během zásahu ustoupí.
 - **Když to do 55. minuty nestihne,** ukáže oznámení Windows s odkazem na okno.

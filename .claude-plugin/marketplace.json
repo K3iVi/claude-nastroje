@@ -3,7 +3,7 @@
   "owner": {
     "name": "K3iVi"
   },
-  "description": "Panel s přehledem oken a hlídač compactu pro Claude desktop na Windows",
+  "description": "Panel s přehledem oken Claude desktop a hlídač compactu pro každé okno Claude Code",
   "plugins": [
     {
       "name": "okna",
@@ -16,7 +16,7 @@
     {
       "name": "hlidac-compact",
       "source": "./plugins/hlidac-compact",
-      "description": "Hlídač compactu: velká nečinná okna zkompaktuje před vypršením hodinové cache (Windows, Plánovač úloh)"
+      "description": "Hlídač compactu: velké okno nečinné 50 min zkompaktuje před vypršením hodinové cache, přímo v okně (Claude desktop, terminál, chat Orcy)"
     }
   ]
 }
