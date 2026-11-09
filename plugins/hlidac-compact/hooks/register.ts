@@ -1,14 +1,14 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-// Hlídač compactu uvnitř okna: velké okno, které je 25 min nečinné, zkompaktuje ještě s teplou
+// Hlídač compactu uvnitř okna: velké okno, které je 50 min nečinné, zkompaktuje ještě s teplou
 // hodinovou cache (compact po jejím vypršení čte celé okno znovu za plnou cenu).
 // Běží v každé relaci Claude Code: Claude desktop, terminál i chat Orcy, kam zvenku nic poslat nejde.
 
-// 25 min, ne 50: chat Orcy po 30 min nečinnosti ukončí proces Claude Code (a s ním i tento časovač)
-// a při další zprávě ho obnoví (SessionStart:resume). Ověřeno v Orce 9. 11. 2026.
-export const IDLE_MS = 25 * 60_000 // tak dlouho po konci tahu
+// Chat Orcy ukončí nečinný proces Claude Code (a s ním i tento časovač) podle nastavení
+// „Stop idle agents after“ (výchozí 30 min). Aby hlídač v Orce fungoval, nastav tam 1 h nebo víc.
+export const IDLE_MS = 50 * 60_000 // tak dlouho po konci tahu
 export const CACHE_MS = 60 * 60_000 // TTL cache; později (PC spalo) už compact nic neušetří
-export const MIN_TOKENS = 200_000 // menší okno se nevyplatí kompaktovat
+export const MIN_TOKENS = 150_000 // menší okno se nevyplatí kompaktovat
 
 let lastEnd = 0 // konec posledního tahu hlavního vlákna; 0 = právě běží tah
 let timer: { cancel: () => void } | undefined

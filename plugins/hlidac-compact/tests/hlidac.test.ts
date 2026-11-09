@@ -21,12 +21,12 @@ async function turn($: Parameters<Parameters<typeof test>[1]>[0], id: string) {
   await $.turn.complete({ turnId: id, reason: 'answer', answer: 'OK', durationMs: 1000, isAborted: false })
 }
 
-test('a large window idle for 25 minutes is compacted once', { timeoutMs: 20_000 }, async ($, on) => {
+test('a large window idle for 50 minutes is compacted once', { timeoutMs: 20_000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   const runs = env(on, 250_000)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await turn($, 't1')
-  await clock.advance(24 * MIN)
+  await clock.advance(49 * MIN)
   expect(runs).toEqual([])
   await clock.advance(2 * MIN)
   await clock.settle()
@@ -41,19 +41,19 @@ test('a new turn restarts the wait, and a small window is left alone', { timeout
   const runs = env(on, 250_000)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await turn($, 't1')
-  await clock.advance(20 * MIN)
+  await clock.advance(40 * MIN)
   await turn($, 't2')
-  await clock.advance(20 * MIN)
+  await clock.advance(40 * MIN)
   await clock.settle()
   expect(runs).toEqual([])
-  await clock.advance(6 * MIN)
+  await clock.advance(11 * MIN)
   await clock.settle()
   expect(runs).toEqual(['compact'])
 })
 
-test('a window under 200k is not compacted', { timeoutMs: 20_000 }, async ($, on) => {
+test('a window under 150k is not compacted', { timeoutMs: 20_000 }, async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const runs = env(on, 150_000)
+  const runs = env(on, 120_000)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await turn($, 't1')
   await clock.advance(55 * MIN)
