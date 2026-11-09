@@ -28,7 +28,7 @@ Panel má od verze 0.6 vlastní repo **[K3iVi/claude-okna](https://github.com/K3
 
 Claude drží kontext okna hodinu v prompt cache. Když se k velkému oknu vrátíš později, `/compact` (ruční i automatický) přečte celé okno znovu za plnou cenu. Hlídač to udělá ještě s platnou cache.
 
-**Od verze 2.0 hlídá přímo v okně** a stačí plugin nainstalovat. Když je okno nad 200k tokenů 50 minut po posledním tahu nečinné, plugin v něm spustí `/compact`. Funguje v Claude desktop, v terminálu i v chatu [Orca](https://github.com/stablyai/orca), kam zvenku nic napsat nejde. Když PC mezitím spalo a od tahu uběhla přes hodinu, nedělá nic, protože cache už vypršela. Okno při compactu ukáže řádek „hlídač compactu: …“. Plugin hlídá jen okna spuštěná po instalaci nebo po `/reload-plugins`.
+**Od verze 2.0 hlídá přímo v okně** a stačí plugin nainstalovat. Když je okno nad 200k tokenů 25 minut po posledním tahu nečinné (chat Orcy nečinný proces po 30 min ukončí, proto ne později), plugin v něm spustí `/compact`. Funguje v Claude desktop, v terminálu i v chatu [Orca](https://github.com/stablyai/orca), kam zvenku nic napsat nejde. Když PC mezitím spalo a od tahu uběhla přes hodinu, nedělá nic, protože cache už vypršela. Okno při compactu ukáže řádek „hlídač compactu: …“. Plugin hlídá jen okna spuštěná po instalaci nebo po `/reload-plugins`.
 
 ### Starší varianta: Plánovač úloh (jen Claude desktop na Windows)
 

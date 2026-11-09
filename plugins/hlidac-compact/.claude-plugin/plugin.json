@@ -1,6 +1,6 @@
 {
   "name": "hlidac-compact",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": { "name": "K3iVi" },
-  "description": "Hlídač compactu: velké okno nečinné 50 min zkompaktuje před koncem hodinové cache — přímo v okně (Claude desktop, terminál, chat Orcy); skill /hlidac-compact = starší varianta přes Plánovač úloh Windows"
+  "description": "Hlídač compactu: velké okno nečinné 25 min zkompaktuje před koncem hodinové cache — přímo v okně (Claude desktop, terminál, chat Orcy); skill /hlidac-compact = starší varianta přes Plánovač úloh Windows"
 }

@@ -16,7 +16,7 @@
     {
       "name": "hlidac-compact",
       "source": "./plugins/hlidac-compact",
-      "description": "Hlídač compactu: velké okno nečinné 50 min zkompaktuje před vypršením hodinové cache, přímo v okně (Claude desktop, terminál, chat Orcy)"
+      "description": "Hlídač compactu: velké okno nečinné 25 min zkompaktuje před vypršením hodinové cache, přímo v okně (Claude desktop, terminál, chat Orcy)"
     }
   ]
 }
