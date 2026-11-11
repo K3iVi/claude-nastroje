@@ -19,8 +19,25 @@ async function tryCompact($: EngineInterface, end: number): Promise<void> {
   if (idle >= CACHE_MS) return
   const tokens = (await $.session.usage()).context.tokens ?? 0
   if (tokens < MIN_TOKENS) return
-  $.ui.log(`hlídač compactu: okno nečinné ${Math.round(idle / 60_000)} min, ${Math.round(tokens / 1000)}k, kompaktuji před koncem cache`)
-  await $.command.run({ command: 'compact' })
+  const min = Math.round(idle / 60_000)
+  const k = Math.round(tokens / 1000)
+  $.ui.log(`hlídač compactu: okno nečinné ${min} min, ${k}k, kompaktuji před koncem cache`)
+  // Chat Orcy řádek z ui.log nezobrazí: poznámka jde i do shrnutí a záznam do souboru pro panel Okna.
+  await $.command.run({
+    command: 'compact',
+    args: `Na úplný začátek shrnutí dej samostatný řádek: „🗜 Zkompaktoval hlídač compactu po ${min} min nečinnosti (okno mělo ${k}k).“`,
+  })
+  await record($, end, idle, tokens).catch(() => undefined)
+}
+
+// Záznam posledního compactu okna: ~/.claude/hlidac-compact/compacty/<id relace>.json
+async function record($: EngineInterface, end: number, idle: number, before: number): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (!home) return
+  const sessionId = await $.session.id()
+  const after = (await $.session.usage()).context.tokens ?? null
+  const row = { sessionId, at: new Date(end + idle).toISOString(), idleMin: Math.round(idle / 60_000), before, after }
+  await $.fs.write(`${home}/.claude/hlidac-compact/compacty/${sessionId}.json`, JSON.stringify(row) + '\n')
 }
 
 export const register: Register = on => {
